@@ -61,6 +61,12 @@ run_task "ruff-embed-check" "$REPO_ROOT/hindsight-embed" "uv run --frozen ruff c
 run_task "ruff-embed-format" "$REPO_ROOT/hindsight-embed" "uv run --frozen ruff format ."
 run_task "ty-embed" "$REPO_ROOT/hindsight-embed" "uv run --frozen ty check hindsight_embed"
 
+# Python hindsight-homelab tasks (standalone project, not a root workspace
+# member — see hindsight-homelab/pyproject.toml — so it has its own uv.lock).
+run_task "ruff-homelab-check" "$REPO_ROOT/hindsight-homelab" "uv run --frozen ruff check --fix ."
+run_task "ruff-homelab-format" "$REPO_ROOT/hindsight-homelab" "uv run --frozen ruff format ."
+run_task "ty-homelab" "$REPO_ROOT/hindsight-homelab" "uv run --frozen ty check hindsight_homelab"
+
 # Integrations: lint packages with modifications vs HEAD locally; lint all in CI.
 # Python integrations use shared ruff.toml; Node integrations use shared .prettierrc.json.
 INTEGRATIONS_DIR="$REPO_ROOT/hindsight-integrations"
