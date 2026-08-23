@@ -10,5 +10,23 @@ license = "MIT"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+# Dev-only: needed to run this package's own tests. NOT installed at image
+# build time (installs use `--no-deps`) and NOT a runtime dependency of the
+# extension itself.
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
 [tool.setuptools]
 packages = ["hindsight_homelab"]
+
+[tool.pytest.ini_options]
+# Auto mode: every `async def test_*` runs as a coroutine without needing an
+# explicit @pytest.mark.asyncio marker (the brief's own test file relies on
+# the marker directly too, so either mode collects them — auto also removes
+# the failure mode where a machine without pytest-asyncio silently skips/
+# errors on only the async tests, leaving the sync ones looking green).
+asyncio_mode = "auto"
+addopts = "--strict-markers"
