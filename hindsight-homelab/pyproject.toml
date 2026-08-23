@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Multi-tenant static-key tenant extension for Hindsight"
 license = "MIT"
 requires-python = ">=3.11"
+# Intentionally empty: this package imports only from `hindsight_api`, which
+# the runtime image already installs, and is installed with `--no-deps` at
+# image build time. It has no runtime dependencies of its own.
 dependencies = []
 
 [project.optional-dependencies]
@@ -55,29 +58,3 @@ ignore = [
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-
-[tool.ty]
-[tool.ty.environment]
-python-version = "3.11"
-
-# uv-specific dev tooling group, mirroring hindsight-api-slim/hindsight-embed.
-# hindsight-homelab is deliberately NOT listed in the root pyproject.toml's
-# [tool.uv.workspace] members (that file is upstream-owned and must not be
-# edited), so this package resolves as its own standalone uv project with
-# its own uv.lock, and `uv run --frozen` in scripts/hooks/lint.sh runs
-# against that lock rather than the workspace one.
-[dependency-groups]
-dev = [
-    "pytest>=8.0.0",
-    "pytest-asyncio>=0.21.0",
-    "ruff>=0.8.0",
-    "ty>=0.0.1",
-    # Dev/type-check only, resolved by path from this sibling workspace
-    # member — never a [project.dependencies] entry, so it plays no part in
-    # `pip install --no-deps ./hindsight-homelab` at image build time. Without
-    # it, `ty` cannot see the `hindsight_api` types this package imports.
-    "hindsight-api-slim",
-]
-
-[tool.uv.sources]
-hindsight-api-slim = { path = "../hindsight-api-slim" }
