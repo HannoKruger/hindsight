@@ -4,7 +4,7 @@ from hindsight_api.extensions.tenant import AuthenticationError
 from hindsight_api.models import RequestContext
 from hindsight_homelab.tenant import MultiKeyTenantExtension
 
-KEYMAP = "key-aaa:hanno,key-bbb:hakru"
+KEYMAP = "key-aaa:tenant_one,key-bbb:tenant_two"
 
 
 def ext():
@@ -14,8 +14,8 @@ def ext():
 @pytest.mark.asyncio
 async def test_known_key_maps_to_its_own_schema():
     e = ext()
-    assert (await e.authenticate(RequestContext(api_key="key-aaa"))).schema_name == "hanno"
-    assert (await e.authenticate(RequestContext(api_key="key-bbb"))).schema_name == "hakru"
+    assert (await e.authenticate(RequestContext(api_key="key-aaa"))).schema_name == "tenant_one"
+    assert (await e.authenticate(RequestContext(api_key="key-bbb"))).schema_name == "tenant_two"
 
 
 @pytest.mark.asyncio
@@ -34,7 +34,7 @@ async def test_missing_key_is_rejected():
 async def test_mcp_requests_are_authenticated_too():
     # MCP is the transport the agent uses; it must not bypass auth.
     e = ext()
-    assert (await e.authenticate_mcp(RequestContext(api_key="key-aaa"))).schema_name == "hanno"
+    assert (await e.authenticate_mcp(RequestContext(api_key="key-aaa"))).schema_name == "tenant_one"
     with pytest.raises(AuthenticationError):
         await e.authenticate_mcp(RequestContext(api_key="key-zzz"))
 
@@ -42,7 +42,7 @@ async def test_mcp_requests_are_authenticated_too():
 @pytest.mark.asyncio
 async def test_list_tenants_returns_every_schema_so_workers_poll_both():
     schemas = {t.schema for t in await ext().list_tenants()}
-    assert schemas == {"hanno", "hakru"}
+    assert schemas == {"tenant_one", "tenant_two"}
 
 
 def test_empty_keymap_is_rejected_at_construction():
@@ -58,4 +58,4 @@ def test_malformed_keymap_entry_is_rejected_at_construction():
 def test_duplicate_key_is_rejected_at_construction():
     # Two schemas behind one key would silently merge two tenants.
     with pytest.raises(ValueError):
-        MultiKeyTenantExtension({"keymap": "key-aaa:hanno,key-aaa:hakru"})
+        MultiKeyTenantExtension({"keymap": "key-aaa:tenant_one,key-aaa:tenant_two"})
