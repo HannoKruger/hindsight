@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hindsight-homelab"
+version = "0.1.0"
+description = "Multi-tenant static-key tenant extension for Hindsight"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.setuptools]
+packages = ["hindsight_homelab"]
