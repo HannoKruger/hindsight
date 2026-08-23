@@ -12,6 +12,10 @@ COPY . /src
 # hindsight-api is a meta-package over the hindsight-api-slim workspace member.
 RUN pip install --no-cache-dir ./hindsight-api-slim
 
+# Homelab tenant extension — must be importable by the extension loader at runtime.
+RUN pip install --no-cache-dir --no-deps ./hindsight-homelab
+RUN python -c "from hindsight_homelab.tenant import MultiKeyTenantExtension; print('extension importable')"
+
 EXPOSE 8888 9999
 
 CMD ["hindsight-api"]
