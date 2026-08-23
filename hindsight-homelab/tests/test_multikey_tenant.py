@@ -31,6 +31,18 @@ async def test_missing_key_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_unknown_and_missing_key_raise_the_identical_message():
+    # The security-relevant half of "not a key oracle": a caller must not be
+    # able to tell "wrong key" apart from "no key" from the error text.
+    e = ext()
+    with pytest.raises(AuthenticationError) as unknown_exc:
+        await e.authenticate(RequestContext(api_key="key-zzz"))
+    with pytest.raises(AuthenticationError) as missing_exc:
+        await e.authenticate(RequestContext(api_key=None))
+    assert str(unknown_exc.value) == str(missing_exc.value)
+
+
+@pytest.mark.asyncio
 async def test_mcp_requests_are_authenticated_too():
     # MCP is the transport the agent uses; it must not bypass auth.
     e = ext()
@@ -59,6 +71,23 @@ def test_duplicate_key_is_rejected_at_construction():
     # Two schemas behind one key would silently merge two tenants.
     with pytest.raises(ValueError):
         MultiKeyTenantExtension({"keymap": "key-aaa:tenant_one,key-aaa:tenant_two"})
+
+
+def test_empty_key_is_rejected_at_construction():
+    with pytest.raises(ValueError):
+        MultiKeyTenantExtension({"keymap": ":tenant_one"})
+
+
+def test_empty_schema_is_rejected_at_construction():
+    with pytest.raises(ValueError):
+        MultiKeyTenantExtension({"keymap": "key-aaa:"})
+
+
+@pytest.mark.asyncio
+async def test_whitespace_around_entries_and_separator_is_tolerated():
+    e = MultiKeyTenantExtension({"keymap": "  key-aaa : tenant_one ,  key-bbb:tenant_two  "})
+    assert (await e.authenticate(RequestContext(api_key="key-aaa"))).schema_name == "tenant_one"
+    assert (await e.authenticate(RequestContext(api_key="key-bbb"))).schema_name == "tenant_two"
 
 
 def test_mcp_auth_token_env_var_is_rejected_at_construction(monkeypatch):
