@@ -61,6 +61,14 @@ run_task "ruff-embed-check" "$REPO_ROOT/hindsight-embed" "uv run --frozen ruff c
 run_task "ruff-embed-format" "$REPO_ROOT/hindsight-embed" "uv run --frozen ruff format ."
 run_task "ty-embed" "$REPO_ROOT/hindsight-embed" "uv run --frozen ty check hindsight_embed"
 
+# Python hindsight-homelab tasks. This package has zero runtime dependencies
+# (it only imports hindsight_api, which the runtime image already installs)
+# and is not a root workspace member, so it's linted with ruff only — no
+# uv.lock/type-checking here, since that would require a path dependency on
+# hindsight-api-slim that goes stale on every upstream merge for no benefit.
+run_task "ruff-homelab-check" "$REPO_ROOT/hindsight-homelab" "uv run --no-project ruff check --fix ."
+run_task "ruff-homelab-format" "$REPO_ROOT/hindsight-homelab" "uv run --no-project ruff format ."
+
 # Integrations: lint packages with modifications vs HEAD locally; lint all in CI.
 # Python integrations use shared ruff.toml; Node integrations use shared .prettierrc.json.
 INTEGRATIONS_DIR="$REPO_ROOT/hindsight-integrations"

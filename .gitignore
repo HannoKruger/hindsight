@@ -75,3 +75,9 @@ hindsight-integrations/_drafts/
 
 blog-post*
 .worktrees/
+
+# hindsight-homelab has zero runtime deps and no automated re-lock process;
+# its uv.lock existed only to let `ty` resolve hindsight_api types via a path
+# dependency, which has been removed. Never commit a lock here again.
+/hindsight-homelab/uv.lock
+.pytest_cache/

@@ -1,0 +1,30 @@
+# Build Hindsight from source in this fork.
+# The database is external (managed PostgreSQL), so no pg0 is bundled here.
+FROM python:3.12-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential curl git \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . /src
+
+# hindsight-api is a meta-package over the hindsight-api-slim workspace member.
+RUN pip install --no-cache-dir ./hindsight-api-slim
+
+# Homelab tenant extension — must be importable by the extension loader at runtime.
+RUN pip install --no-cache-dir --no-deps ./hindsight-homelab
+RUN python -c "from hindsight_homelab.tenant import MultiKeyTenantExtension; print('extension importable')"
+
+# Run as a non-root, unprivileged user. /src (source + any bundled data) and
+# the user's own home (Path.home() is used for the default daemon log path)
+# both need to be writable by it; everything else pip installed under
+# site-packages stays root-owned and read-only to the app, which is fine.
+RUN groupadd --system --gid 999 hindsight \
+ && useradd --system --uid 999 --gid hindsight --home-dir /home/hindsight --create-home hindsight \
+ && chown -R hindsight:hindsight /src
+USER hindsight
+
+EXPOSE 8888 9999
+
+CMD ["hindsight-api"]
