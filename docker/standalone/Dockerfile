@@ -346,6 +346,18 @@ WORKDIR /app
 COPY docker/standalone/start-all.sh /app/start-all.sh
 RUN chmod +x /app/start-all.sh
 
+# --- homelab: multi-tenant static-key tenant extension -----------------------
+# Maps each API key to its own PostgreSQL schema so one deployment can serve
+# several people with genuinely separate memory. Installed with --no-deps: it
+# imports only hindsight_api, which the API venv above already provides.
+ARG INCLUDE_API
+COPY hindsight-homelab /app/hindsight-homelab
+RUN if [ "$INCLUDE_API" != "false" ]; then \
+      /app/api/.venv/bin/pip install --no-cache-dir --no-deps /app/hindsight-homelab && \
+      /app/api/.venv/bin/python -c "from hindsight_homelab.tenant import MultiKeyTenantExtension; print('homelab tenant extension importable')"; \
+    fi
+# -----------------------------------------------------------------------------
+
 RUN chown -R hindsight:hindsight /app
 
 USER hindsight
