@@ -59,3 +59,13 @@ def test_duplicate_key_is_rejected_at_construction():
     # Two schemas behind one key would silently merge two tenants.
     with pytest.raises(ValueError):
         MultiKeyTenantExtension({"keymap": "key-aaa:tenant_one,key-aaa:tenant_two"})
+
+
+def test_mcp_auth_token_env_var_is_rejected_at_construction(monkeypatch):
+    # HINDSIGHT_API_MCP_AUTH_TOKEN is read directly by hindsight_api.api.mcp
+    # and, if set, bypasses TenantExtension.authenticate_mcp() entirely —
+    # every MCP caller would silently fall back to the default schema. Fail
+    # closed at startup instead of letting that happen invisibly.
+    monkeypatch.setenv("HINDSIGHT_API_MCP_AUTH_TOKEN", "some-static-token")
+    with pytest.raises(ValueError):
+        ext()

@@ -11,6 +11,8 @@ would be overkill. See README.md for configuration.
 
 from __future__ import annotations
 
+import os
+
 from hindsight_api.extensions.tenant import AuthenticationError, Tenant, TenantContext, TenantExtension
 from hindsight_api.models import RequestContext
 
@@ -18,6 +20,15 @@ from hindsight_api.models import RequestContext
 # request cannot be used to distinguish "wrong key" from "no key" — the
 # endpoint must not become a key oracle.
 _AUTH_FAILURE_MESSAGE = "Invalid API key"
+
+# hindsight_api.api.mcp reads this var itself, before the tenant extension is
+# ever consulted: if it is set, mcp.py validates the MCP bearer token against
+# it directly, marks the request pre-authenticated, and never calls
+# authenticate_mcp() at all. No schema is resolved, so every MCP caller falls
+# back to the default ("public") schema and this extension's whole purpose —
+# per-tenant isolation — is silently void, with no error anywhere. Refuse to
+# start rather than let that happen invisibly.
+_MCP_AUTH_TOKEN_ENV_VAR = "HINDSIGHT_API_MCP_AUTH_TOKEN"
 
 
 def _parse_keymap(raw: str) -> dict[str, str]:
@@ -69,10 +80,25 @@ class MultiKeyTenantExtension(TenantExtension):
     for a tenant is scoped to its own schema, so tenants never share a
     memory space. RequestContext.allowed_bank_ids is not enforced anywhere in
     the codebase, so it is not a substitute for schema isolation.
+
+    HINDSIGHT_API_MCP_AUTH_TOKEN must be unset. That variable is a legacy,
+    extension-independent MCP auth path in hindsight_api.api.mcp: when set,
+    it bypasses TenantExtension.authenticate_mcp() entirely, so this
+    extension is never consulted and every MCP caller collapses onto the
+    default schema. The constructor below fails closed on it.
     """
 
     def __init__(self, config: dict[str, str]):
         super().__init__(config)
+        if os.environ.get(_MCP_AUTH_TOKEN_ENV_VAR):
+            raise ValueError(
+                f"{_MCP_AUTH_TOKEN_ENV_VAR} is set. That variable makes the MCP transport "
+                "bypass TenantExtension.authenticate_mcp() entirely (see hindsight_api.api.mcp), "
+                "so MultiKeyTenantExtension is never consulted for MCP requests and every MCP "
+                "caller silently falls back to the default schema — the per-tenant isolation "
+                f"this extension exists to provide. Unset {_MCP_AUTH_TOKEN_ENV_VAR} to use "
+                "MultiKeyTenantExtension."
+            )
         self._keymap = _parse_keymap(config.get("keymap", ""))
 
     async def authenticate(self, context: RequestContext) -> TenantContext:
@@ -92,10 +118,13 @@ class MultiKeyTenantExtension(TenantExtension):
     async def authenticate_mcp(self, context: RequestContext) -> TenantContext:
         """Authenticate MCP requests exactly like HTTP requests.
 
-        No bypass flag: the builtin ApiKeyTenantExtension has a
+        No bypass flag on this class: the builtin ApiKeyTenantExtension has a
         mcp_auth_disabled escape hatch, and this extension deliberately does
-        not offer one — MCP is the transport the agent uses, and it must not
-        skip auth.
+        not offer one. The one bypass that can still happen is external to
+        this class entirely — HINDSIGHT_API_MCP_AUTH_TOKEN short-circuits
+        hindsight_api.api.mcp before authenticate_mcp() is ever called — and
+        __init__ refuses to start if that var is set, so reaching this method
+        at all means no bypass is active.
         """
         return await self.authenticate(context)
 
