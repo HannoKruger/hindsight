@@ -12,6 +12,8 @@
 # Secrets — never bake local env files into an image layer
 .env
 **/.env
+**/.env.*
+!**/.env.example
 
 # Git
 .git

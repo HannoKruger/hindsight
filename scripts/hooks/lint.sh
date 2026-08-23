@@ -68,6 +68,17 @@ run_task "ty-embed" "$REPO_ROOT/hindsight-embed" "uv run --frozen ty check hinds
 # hindsight-api-slim that goes stale on every upstream merge for no benefit.
 run_task "ruff-homelab-check" "$REPO_ROOT/hindsight-homelab" "uv run --no-project ruff check --fix ."
 run_task "ruff-homelab-format" "$REPO_ROOT/hindsight-homelab" "uv run --no-project ruff format ."
+# tenant.py is the only thing keeping tenants' memories isolated from each
+# other — run its tests on every lint pass so a regression there is never
+# silent. --no-project reuses the same ambient interpreter as the ruff tasks
+# above (pytest/pytest-asyncio come from the repo-root .venv). hindsight-homelab
+# is not a workspace member, so `uv sync` above never installs it into that
+# venv (and would strip a manual editable install if one existed) — PYTHONPATH=.
+# makes the local hindsight_homelab/ package importable from source instead,
+# with no install step required. `env` (not a bare "VAR=val" prefix) is
+# required here since run_task invokes $cmd after word-splitting a variable,
+# which does not get bash's assignment-prefix treatment.
+run_task "pytest-homelab" "$REPO_ROOT/hindsight-homelab" "env PYTHONPATH=. uv run --no-project pytest tests/"
 
 # Integrations: lint packages with modifications vs HEAD locally; lint all in CI.
 # Python integrations use shared ruff.toml; Node integrations use shared .prettierrc.json.

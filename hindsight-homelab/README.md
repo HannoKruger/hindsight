@@ -22,6 +22,20 @@ Whitespace around entries and around the `key:schema` separator is tolerated.
 Each key must be unique — a duplicate key would silently merge two tenants
 into one schema, so it is rejected at startup instead.
 
+Keys and schema names **must not contain `:` or `,`** — the keymap is parsed
+by splitting on those characters, so a key containing `:` would be silently
+truncated to a shorter, unintended key (with the rest absorbed into the
+schema), and a key containing `,` would be split into unrelated garbage
+entries. Both are rejected at startup instead of silently corrupting the
+config.
+
+Two different keys mapping to the *same* schema is not rejected (key
+rotation legitimately does this), but it is logged as a warning at startup —
+it's exactly the failure mode this extension exists to prevent, so it should
+never be silent. The full set of distinct schemas configured is also logged
+at startup (info level) so a typo'd schema name is visible in the logs
+instead of quietly becoming a new, empty tenant.
+
 Example, mapping two callers to two isolated schemas:
 
 ```
@@ -58,8 +72,11 @@ merging every tenant.
 - `list_tenants()` returns one `Tenant` per distinct schema in the keymap, so
   background workers poll every tenant's schema.
 - All keymap validation (empty keymap, malformed entries, empty key/schema,
-  duplicate keys) happens at construction time, so a bad configuration fails
-  the deployment at startup rather than on the first request.
+  reserved characters (`:`/`,`) in a key or schema, duplicate keys) happens
+  at construction time, so a bad configuration fails the deployment at
+  startup rather than on the first request. Every validation error
+  identifies the offending entry by its position and (once parsed) schema
+  name — never by key material, since that text ends up in startup logs.
 
 ### Installing
 
