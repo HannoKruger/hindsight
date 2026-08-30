@@ -356,7 +356,7 @@ COPY hindsight-homelab /app/hindsight-homelab
 # API venv is uv-created so it has no pip of its own — install with uv.
 RUN if [ "$INCLUDE_API" != "false" ]; then \
       uv pip install --python /app/api/.venv/bin/python --no-deps /app/hindsight-homelab && \
-      /app/api/.venv/bin/python -c "from hindsight_homelab.tenant import MultiKeyTenantExtension; print('homelab tenant extension importable')"; \
+      /app/api/.venv/bin/python -c "from hindsight_homelab.tenant import MultiKeyTenantExtension; from hindsight_homelab.bank_allowlist import BankAllowlistValidator; print('homelab extensions importable')"; \
     fi
 # -----------------------------------------------------------------------------
 
