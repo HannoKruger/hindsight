@@ -730,7 +730,11 @@ class TestCurationRelinking:
 class TestGuardsAndListing:
     @pytest.mark.asyncio
     @pytest.mark.memory_backend_incompatible
-    async def test_cannot_curate_observation(self, memory: MemoryEngine, request_context: RequestContext):
+    async def test_curating_observation_redirects_to_its_source_fact(
+        self, memory: MemoryEngine, request_context: RequestContext
+    ):
+        """Recall returns observations, so callers hold an observation id far more often
+        than a fact id. Editing one resolves to the fact behind it instead of failing."""
         bank_id = f"test-curation-obs-{uuid.uuid4().hex[:8]}"
         await _ensure_bank(memory, bank_id, request_context)
 
@@ -739,8 +743,39 @@ class TestGuardsAndListing:
             m1 = await _insert_memory(conn, memory, bank_id, "source fact")
             obs_id = await _insert_observation(conn, bank_id, "a synthesized observation", [m1])
 
-        with pytest.raises(ValueError, match="observation"):
-            await memory.update_memory_unit(bank_id, str(obs_id), state="invalidated", request_context=request_context)
+        result = await memory.update_memory_unit(
+            bank_id, str(obs_id), text="corrected fact", request_context=request_context
+        )
+
+        # The edit lands on the source fact, and the response identifies the row actually
+        # changed — not the observation id that was passed in.
+        assert result is not None
+        assert result["id"] == str(m1)
+        assert result["text"] == "corrected fact"
+
+        await memory.delete_bank(bank_id, request_context=request_context)
+
+    @pytest.mark.asyncio
+    @pytest.mark.memory_backend_incompatible
+    async def test_curating_multi_source_observation_raises_with_the_candidates(
+        self, memory: MemoryEngine, request_context: RequestContext
+    ):
+        """With several sources there is no single fact to correct, so guessing would
+        silently edit the wrong one. Name the candidates and let the caller choose."""
+        bank_id = f"test-curation-obs-multi-{uuid.uuid4().hex[:8]}"
+        await _ensure_bank(memory, bank_id, request_context)
+
+        pool = await memory._get_pool()
+        async with pool.acquire() as conn:
+            m1 = await _insert_memory(conn, memory, bank_id, "first source fact")
+            m2 = await _insert_memory(conn, memory, bank_id, "second source fact")
+            obs_id = await _insert_observation(conn, bank_id, "a merged observation", [m1, m2])
+
+        with pytest.raises(ValueError) as exc:
+            await memory.update_memory_unit(
+                bank_id, str(obs_id), text="corrected fact", request_context=request_context
+            )
+        assert str(m1) in str(exc.value) and str(m2) in str(exc.value)
 
         await memory.delete_bank(bank_id, request_context=request_context)
 

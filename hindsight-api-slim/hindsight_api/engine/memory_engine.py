@@ -9201,8 +9201,10 @@ class MemoryEngine(MemoryEngineInterface):
         extractor asserted for it — preserving the assertion is the reversible
         choice; deleting it is not, since there is no path that could re-derive it.
 
-        Only ``world``/``experience`` facts can be curated — observations are
-        derived and regenerate from their sources. Returns the updated memory
+        Observations are derived and regenerate from their sources, so an
+        observation id is resolved to the single fact behind it and that fact is
+        curated instead (ambiguous multi-source observations still raise). Returns
+        the updated memory
         (same shape as :meth:`get_memory_unit`) or None if not found.
         """
         try:
@@ -9299,10 +9301,47 @@ class MemoryEngine(MemoryEngineInterface):
                 return None
             current_fact_type = record.fact_type
             if current_fact_type not in ("experience", "world"):
-                raise ValueError(
-                    f"Memory '{memory_id}' is a {current_fact_type}; only world/experience facts can be "
-                    "curated. Observations are derived and regenerate from their sources."
+                # An observation is a rendering of the facts it was consolidated from, and
+                # consolidation regenerates it — editing one would be silently undone. Callers
+                # land on one constantly anyway, because recall returns observations by default,
+                # so resolve to the fact behind it rather than making every caller (and every
+                # system prompt) know to do that hop by hand.
+                sources = [str(src) for src in (record.source_memory_ids or [])]
+                if len(sources) != 1:
+                    raise ValueError(
+                        f"Memory '{memory_id}' is a {current_fact_type} derived from "
+                        f"{len(sources)} facts, so there is no single fact behind it to correct. "
+                        "Curate one of its sources directly: "
+                        f"{', '.join(sources) if sources else 'none recorded'}."
+                    )
+                logger.info(
+                    "update_memory: %s %s is derived; curating its source fact %s instead",
+                    current_fact_type,
+                    memory_id,
+                    sources[0],
                 )
+                memory_id = sources[0]
+                memory_uuid = uuid.UUID(memory_id)
+                live_batch = await store.get_memories(
+                    conn=conn, fq_table=fq_table, bank_id=bank_id, unit_ids=[str(memory_uuid)]
+                )
+                live = live_batch[0] if live_batch else None
+                archived = (
+                    None
+                    if live
+                    else await store.get_archived_memory(
+                        conn=conn, fq_table=fq_table, bank_id=bank_id, unit_id=str(memory_uuid)
+                    )
+                )
+                record = live or archived
+                if record is None:
+                    return None
+                current_fact_type = record.fact_type
+                if current_fact_type not in ("experience", "world"):
+                    raise ValueError(
+                        f"Memory '{memory_id}' is a {current_fact_type}; only world/experience facts "
+                        "can be curated."
+                    )
 
             # --- Edit fields (live rows only): text / context / dates / fact_type / entities ---
             doing_edit = any(v is not None for v in (text, context, occurred_start, occurred_end, new_fact_type)) or (

@@ -1791,7 +1791,7 @@ class UpdateMemoryRequest(BaseModel):
     Provide ``text`` to correct the fact, and/or ``state`` to invalidate
     ('invalidated') or revert ('valid') it. ``reason`` is optional free text
     recorded on the memory. At least one of ``text`` or ``state`` must be set.
-    Only world/experience facts can be curated; observations are derived.
+    An observation id is resolved to the source fact behind it and that fact is curated.
     """
 
     model_config = ConfigDict(
@@ -4619,7 +4619,7 @@ def _register_routes(app: FastAPI):
         description="Edit a memory's text and/or change its curation state "
         "(invalidate / revert). Invalidated memories are excluded from recall, "
         "consolidation, and graph maintenance but kept for audit (reversible). "
-        "Only world/experience facts can be curated; observations are derived.",
+        "An observation id is resolved to the source fact behind it and that fact is curated.",
         operation_id="update_memory",
         tags=["Memory"],
     )

@@ -3390,8 +3390,10 @@ def _register_update_memory(mcp: FastMCP, memory: MemoryEngine, config: MCPTools
             fact deliberately: an existing entity is then reused only on a
             case-insensitive name match, and any other name becomes its own entity.
 
-            Only raw world/experience facts can be edited; observations are derived.
-            To retire or restore a fact, use invalidate_memory instead.
+            Pass any memory_id, including one returned by recall. Recall returns
+            derived observations; those are regenerated from the facts behind them, so
+            an observation id is resolved to its source fact automatically and that
+            fact is edited. To retire or restore a fact, use invalidate_memory.
     """
 
     if config.include_bank_id_param:
