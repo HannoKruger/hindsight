@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Retain skips transcript entries marked `isMeta`. Claude Code writes a loaded
+  skill's full SKILL.md into the transcript as a meta `user` entry, so every
+  session that loaded a skill re-extracted the same facts; one homelab bank
+  collected about 834 duplicates this way.
+
 ### Added
 
 - `{user_id}` template variable for `retainTags` and `retainMetadata`, resolved

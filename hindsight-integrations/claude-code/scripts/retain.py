@@ -54,8 +54,10 @@ def read_transcript(transcript_path: str) -> list:
                     continue
                 try:
                     entry = json.loads(line)
-                    # Claude Code nested format: {type: "user", message: {role, content}}
-                    if entry.get("type") in ("user", "assistant"):
+                    # Claude Code nested format: {type: "user", message: {role, content}}.
+                    # isMeta entries are harness-injected (e.g. a loaded SKILL.md); retaining
+                    # them re-extracted the same facts from every session.
+                    if entry.get("type") in ("user", "assistant") and not entry.get("isMeta"):
                         msg = entry.get("message", {})
                         if isinstance(msg, dict) and msg.get("role"):
                             messages.append(msg)
