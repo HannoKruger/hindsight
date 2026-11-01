@@ -46,8 +46,8 @@ def _truncate_inputs(texts: list[str], max_input_tokens: int, backend: Embedding
     if original_token_counts:
         logger.warning(
             "Embeddings: truncated %d of %d input(s) to %d tokens for provider %s "
-            "(largest was ~%d tokens); embedded content is incomplete. Raise or unset "
-            "%s if this is unexpected.",
+            "(largest was ~%d tokens); embedded content is incomplete. The cap is %s "
+            "when set, otherwise the model's own input limit.",
             len(original_token_counts),
             len(texts),
             max_input_tokens,
@@ -95,7 +95,10 @@ async def generate_embeddings_batch(
     # Cap oversized inputs once, here, before they reach any provider's encode(). Kept
     # out of the individual backends so every provider (and every call path — retain,
     # recall queries, consolidation, import) gets identical, model-agnostic truncation.
-    max_input_tokens = get_config().embeddings_max_input_tokens
+    # With no configured cap, a backend that knows its model's hard limit supplies it:
+    # leaving the cap off by default let a 32k-character mental model fail its refresh
+    # on every run, after the synthesis had already been paid for.
+    max_input_tokens = get_config().embeddings_max_input_tokens or getattr(embeddings_backend, "max_input_tokens", None)
     if max_input_tokens is not None and texts:
         texts = _truncate_inputs(texts, max_input_tokens, embeddings_backend)
 

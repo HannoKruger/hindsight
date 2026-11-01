@@ -10,7 +10,7 @@ import logging
 from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Callable, Self
 
@@ -426,3 +426,32 @@ class ProviderRateLimitResetError(Exception):
     def __init__(self, retry_at: datetime, message: str = "") -> None:
         self.retry_at = retry_at
         super().__init__(message)
+
+
+# A spending cap names no reset time: LiteLLM's key budgets roll over on their own
+# window, and a provider account cap waits for the billing month or a human. Retrying
+# within seconds only adds rejected calls, so defer for long enough to be cheap.
+SPEND_LIMIT_RETRY_DELAY = timedelta(hours=1)
+
+# LiteLLM tags every key/user/team budget rejection with this error type, and wraps a
+# DeepInfra account cap as a 402 whose message carries the provider's own wording.
+_SPEND_LIMIT_MARKERS = ("budget_exceeded", "reached user-set limit")
+
+
+def is_spend_limit_error(error: BaseException) -> bool:
+    """Whether a provider refused the call because a spending cap is used up.
+
+    Walks the exception chain because the embedding and reranker paths re-raise
+    provider errors as a plain ``Exception`` carrying only the original message.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if getattr(current, "status_code", None) == 402:
+            return True
+        message = str(current)
+        if any(marker in message for marker in _SPEND_LIMIT_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False

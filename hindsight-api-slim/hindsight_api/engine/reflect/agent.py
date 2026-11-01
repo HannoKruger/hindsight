@@ -14,7 +14,7 @@ import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from ...config import get_config
-from ..llm_interface import LLM_TOOL_CHOICE_AUTO, LLMToolChoice
+from ..llm_interface import LLM_TOOL_CHOICE_AUTO, LLMToolChoice, ProviderRateLimitResetError
 from .models import DirectiveInfo, LLMCall, ReflectAgentResult, StructuredOutputResult, TokenUsageSummary, ToolCall
 from .prompts import (
     _SPLIT_SYNTHESIS_WARN_CHUNKS,
@@ -868,6 +868,10 @@ async def _run_reflect_agent_inner(
                 }
             )
 
+        except ProviderRateLimitResetError:
+            # Quota is gone until retry_at, so every further iteration would be refused
+            # too. Let the caller defer the whole operation instead.
+            raise
         except Exception as e:
             err_duration = int((time.time() - llm_start) * 1000)
             consecutive_errors += 1

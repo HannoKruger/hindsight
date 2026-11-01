@@ -130,6 +130,11 @@ class Embeddings(ABC):
     query_prefix: str = ""
     passage_prefix: str = ""
 
+    # The model's hard per-input token limit, for providers that reject an oversized
+    # input instead of truncating it. Used as the truncation cap when
+    # HINDSIGHT_API_EMBEDDINGS_MAX_INPUT_TOKENS is unset. None means no known limit.
+    max_input_tokens: int | None = None
+
     def encode_query(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for query text, applying the configured query prefix."""
         return self._encode_prefixed(texts, self.query_prefix)
@@ -645,6 +650,11 @@ class OpenAIEmbeddings(Embeddings):
         "text-embedding-ada-002": 1536,
     }
 
+    # OpenAI answers a longer input with a permanent 400 ("maximum input length is 8192
+    # tokens"). A refresh that pays for minutes of synthesis and then fails here loses all
+    # of it, and the next scheduled run fails the same way.
+    KNOWN_MODEL_MAX_INPUT_TOKENS = 8191
+
     def __init__(
         self,
         api_key: str,
@@ -677,6 +687,9 @@ class OpenAIEmbeddings(Embeddings):
         self.max_retries = max_retries
         self.query_prefix = query_prefix
         self.passage_prefix = passage_prefix
+        # A LiteLLM-style route ("openai/text-embedding-3-small") names the same model.
+        if model.rsplit("/", 1)[-1] in self.MODEL_DIMENSIONS:
+            self.max_input_tokens = self.KNOWN_MODEL_MAX_INPUT_TOKENS
         self._client = None
         self._dimension: int | None = None
 

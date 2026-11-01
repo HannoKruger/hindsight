@@ -20,6 +20,7 @@ from hindsight_api.config import (
     ENV_EMBEDDINGS_MAX_INPUT_TOKENS,
     HindsightConfig,
 )
+from hindsight_api.engine.embeddings import OpenAIEmbeddings
 from hindsight_api.engine.retain import embedding_utils
 from hindsight_api.engine.token_encoding import get_token_encoding
 
@@ -97,6 +98,36 @@ class TestGenerateEmbeddingsBatch:
             await embedding_utils.generate_embeddings_batch(backend, [long_text])
 
         assert backend.received == [long_text]
+
+    async def test_model_limit_applies_when_no_cap_is_configured(self):
+        backend = _FakeBackend()
+        backend.max_input_tokens = 50
+        with _patch_cap(None):
+            await embedding_utils.generate_embeddings_batch(backend, ["word " * 500])
+
+        assert len(get_token_encoding().encode(backend.received[0])) <= 50
+
+    async def test_configured_cap_wins_over_model_limit(self):
+        backend = _FakeBackend()
+        backend.max_input_tokens = 400
+        with _patch_cap(50):
+            await embedding_utils.generate_embeddings_batch(backend, ["word " * 500])
+
+        assert len(get_token_encoding().encode(backend.received[0])) <= 50
+
+
+class TestOpenAIModelLimit:
+    """OpenAI rejects inputs over 8192 tokens with a permanent 400 instead of truncating.
+
+    That rejection is what failed a 32k-character mental model's refresh on every run.
+    """
+
+    @pytest.mark.parametrize("model", ["text-embedding-3-small", "openai/text-embedding-3-small"])
+    def test_known_openai_model_has_a_limit(self, model):
+        assert OpenAIEmbeddings(api_key="test", model=model).max_input_tokens == 8191
+
+    def test_unknown_model_behind_the_openai_api_has_none(self):
+        assert OpenAIEmbeddings(api_key="test", model="BAAI/bge-m3").max_input_tokens is None
 
 
 class TestConfigWiring:

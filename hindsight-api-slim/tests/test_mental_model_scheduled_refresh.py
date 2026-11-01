@@ -326,3 +326,112 @@ async def test_not_due_model_is_skipped_even_when_stale(memory: MemoryEngine, re
     await MaintenanceLoop(memory)._run_scheduled_mm_refresh()
 
     assert mm_id not in submitted
+
+
+async def _insert_fact_written(conn, bank_id: str, *, age: str) -> None:
+    """Insert a fact last written ``age`` ago (an interval string, e.g. '1 hour')."""
+    await conn.execute(
+        f"""
+        INSERT INTO memory_units (id, bank_id, text, fact_type, tags, created_at, updated_at)
+        VALUES ($1, $2, 'an older fact', 'experience', '{{}}',
+                now() - INTERVAL '{age}', now() - INTERVAL '{age}')
+        """,
+        uuid.uuid4(),
+        bank_id,
+    )
+
+
+async def _record_finished_refresh(conn, bank_id: str, mm_id: str, *, status: str, age: str) -> None:
+    """Record a refresh operation for ``mm_id`` that ended with ``status``, ``age`` ago."""
+    await conn.execute(
+        f"""
+        INSERT INTO async_operations (operation_id, bank_id, operation_type, status, task_payload, updated_at)
+        VALUES ($1, $2, 'refresh_mental_model', $3, $4::jsonb, now() - INTERVAL '{age}')
+        """,
+        uuid.uuid4(),
+        bank_id,
+        status,
+        json.dumps({"mental_model_id": mm_id}),
+    )
+
+
+async def _is_held(memory: MemoryEngine, bank_id: str, mm_id: str, cron_fired_at) -> bool:
+    async with memory._pool.acquire() as conn:
+        mm_row = await conn.fetchrow(
+            "SELECT id, tags, trigger, last_refreshed_at, last_memory_seen_at "
+            "FROM mental_models WHERE bank_id = $1 AND id = $2",
+            bank_id,
+            mm_id,
+        )
+        return await memory.scheduled_refresh_held_after_failure(conn, bank_id, mm_row, cron_fired_at)
+
+
+def _minutes_ago(minutes: int):
+    from datetime import UTC, datetime, timedelta
+
+    return datetime.now(UTC) - timedelta(minutes=minutes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.memory_backend_incompatible
+async def test_failed_refresh_is_held_until_the_next_cron_fire(memory: MemoryEngine, request_context):
+    """A refresh that failed after the latest cron fire waits for the next one, even with
+    new memories. Without this, a failure that leaves last_refreshed_at untouched keeps
+    the model due on every tick, which re-ran a failing paid refresh every ten minutes."""
+    bank = await _make_bank(memory, request_context)
+    async with memory._pool.acquire() as conn:
+        mm_id = await _insert_mm(conn, bank, refresh_cron="*/5 * * * *", last_refreshed_offset="1 day")
+        await _record_finished_refresh(conn, bank, mm_id, status="failed", age="1 minute")
+        await _insert_fact(conn, bank)
+
+    assert await _is_held(memory, bank, mm_id, cron_fired_at=_minutes_ago(3))
+
+
+@pytest.mark.asyncio
+@pytest.mark.memory_backend_incompatible
+async def test_failed_refresh_is_held_until_a_new_memory_arrives(memory: MemoryEngine, request_context):
+    """A later cron fire alone does not retry a failed refresh: the same inputs would
+    fail the same way. It also needs a memory in scope written after the failure."""
+    bank = await _make_bank(memory, request_context)
+    async with memory._pool.acquire() as conn:
+        mm_id = await _insert_mm(conn, bank, refresh_cron="*/5 * * * *", last_refreshed_offset="1 day")
+        await _insert_fact_written(conn, bank, age="1 hour")
+        await _record_finished_refresh(conn, bank, mm_id, status="failed", age="10 minutes")
+
+    assert await _is_held(memory, bank, mm_id, cron_fired_at=_minutes_ago(1))
+
+    async with memory._pool.acquire() as conn:
+        await _insert_fact(conn, bank)
+
+    assert not await _is_held(memory, bank, mm_id, cron_fired_at=_minutes_ago(1))
+
+
+@pytest.mark.asyncio
+@pytest.mark.memory_backend_incompatible
+async def test_refresh_after_a_success_is_not_held(memory: MemoryEngine, request_context):
+    """Only the latest finished run counts: a success after an older failure clears the hold."""
+    bank = await _make_bank(memory, request_context)
+    async with memory._pool.acquire() as conn:
+        mm_id = await _insert_mm(conn, bank, refresh_cron="*/5 * * * *", last_refreshed_offset="1 day")
+        await _record_finished_refresh(conn, bank, mm_id, status="failed", age="2 hours")
+        await _record_finished_refresh(conn, bank, mm_id, status="completed", age="1 hour")
+
+    assert not await _is_held(memory, bank, mm_id, cron_fired_at=_minutes_ago(1))
+
+
+@pytest.mark.asyncio
+@pytest.mark.memory_backend_incompatible
+async def test_scheduler_does_not_resubmit_a_refresh_that_just_failed(
+    memory: MemoryEngine, request_context, monkeypatch
+):
+    """End to end through the maintenance loop: due, stale, and just failed means skipped."""
+    bank = await _make_bank(memory, request_context)
+    async with memory._pool.acquire() as conn:
+        mm_id = await _insert_mm(conn, bank, refresh_cron="*/5 * * * *", last_refreshed_offset="1 day")
+        await _insert_fact(conn, bank)
+        await _record_finished_refresh(conn, bank, mm_id, status="failed", age="0 seconds")
+
+    submitted = _patch_submit(memory, monkeypatch)
+    await MaintenanceLoop(memory)._run_scheduled_mm_refresh()
+
+    assert mm_id not in submitted

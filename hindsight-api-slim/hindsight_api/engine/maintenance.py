@@ -59,6 +59,7 @@ import logging
 import random
 import time
 from collections.abc import Coroutine
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -108,6 +109,14 @@ _RETENTION_MAX_BATCHES = 1000
 # pods sweeping at once multiply that, which is still orders of magnitude gentler
 # than the unbounded delete this replaces.
 _RETENTION_BATCH_PAUSE_SECONDS = 0.25
+
+
+@dataclass
+class _DueRefresh:
+    """A cron-scheduled mental model whose schedule has fired since its last refresh."""
+
+    row: Any
+    cron_fired_at: datetime
 
 
 class MaintenanceLoop:
@@ -576,7 +585,7 @@ class MaintenanceLoop:
         from croniter import croniter
 
         now = datetime.now(timezone.utc)
-        due = []
+        due: list[_DueRefresh] = []
         for row in rows:
             cron = row["refresh_cron"]
             last = row["last_refreshed_at"]
@@ -589,7 +598,7 @@ class MaintenanceLoop:
                 )
                 continue
             if last is None or prev_fire > last:
-                due.append(row)
+                due.append(_DueRefresh(row=row, cron_fired_at=prev_fire))
         if not due:
             return
 
@@ -610,7 +619,9 @@ class MaintenanceLoop:
         skipped_unknown = 0
         skipped_fresh = 0
         skipped_in_flight = 0
-        for row in due:
+        skipped_after_failure = 0
+        for due_refresh in due:
+            row = due_refresh.row
             schema = row["schema_name"]
             bank_id = row["bank_id"]
             mm_id = row["mental_model_id"]
@@ -638,8 +649,14 @@ class MaintenanceLoop:
                     if mm_row is None:
                         continue
                     is_stale = await engine.compute_mental_model_is_stale(conn, bank_id, mm_row)
+                    held_after_failure = is_stale and await engine.scheduled_refresh_held_after_failure(
+                        conn, bank_id, mm_row, due_refresh.cron_fired_at
+                    )
                 if not is_stale:
                     skipped_fresh += 1
+                    continue
+                if held_after_failure:
+                    skipped_after_failure += 1
                     continue
                 # skip_if_in_flight makes the enqueue itself idempotent. The discovery
                 # routine already excludes models with a pending/processing refresh,
@@ -663,10 +680,11 @@ class MaintenanceLoop:
             finally:
                 _current_schema.reset(token)
 
-        if submitted or skipped_unknown or skipped_fresh or skipped_in_flight:
+        if submitted or skipped_unknown or skipped_fresh or skipped_in_flight or skipped_after_failure:
             logger.info(
                 f"Scheduled mental model refresh: scheduled {submitted} model(s)"
                 + (f", {skipped_fresh} up-to-date" if skipped_fresh else "")
                 + (f", {skipped_in_flight} already in flight" if skipped_in_flight else "")
+                + (f", {skipped_after_failure} held after a failed refresh" if skipped_after_failure else "")
                 + (f", skipped {skipped_unknown} in unrecognized schema(s)" if skipped_unknown else "")
             )

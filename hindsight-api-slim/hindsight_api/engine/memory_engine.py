@@ -62,7 +62,12 @@ from .db.ops_postgresql import pg_search_vector_expr
 from .db.postgresql import PostgreSQLBackend
 from .db.postgresql import apply_session_settings as _apply_session_settings
 from .db_budget import budgeted_operation
-from .llm_interface import ProviderContentPolicyError, ProviderRateLimitResetError
+from .llm_interface import (
+    SPEND_LIMIT_RETRY_DELAY,
+    ProviderContentPolicyError,
+    ProviderRateLimitResetError,
+    is_spend_limit_error,
+)
 from .llm_trace import (
     LLMRequestEntry,
     LLMRequestListResponse,
@@ -1093,12 +1098,24 @@ def _entity_map_from_results(
     return out
 
 
+def _is_input_too_long_error(e: Exception) -> bool:
+    """Return True when a provider rejected an input for exceeding the model's limit.
+
+    The same payload is just as long on the next attempt. Each retry of a mental model
+    refresh re-ran minutes of paid synthesis only to be rejected at the final
+    embedding step again.
+    """
+    message = str(e).lower()
+    return "contextwindowexceedederror" in message or "maximum input length" in message
+
+
 def _is_non_retryable_task_error(e: Exception) -> bool:
     """Classify deterministic task failures that should skip worker retry."""
     return (
         isinstance(e, asyncpg.exceptions.IntegrityConstraintViolationError)
         or _is_oracledb_integrity_error(e)
         or _is_invalid_embedding_dimension_error(e)
+        or _is_input_too_long_error(e)
         # A provider content-policy refusal is a function of the content, not of
         # the moment: re-running the task feeds the same chunk to the same model
         # and earns the same refusal (issue #3690).
@@ -3129,6 +3146,15 @@ class MemoryEngine(MemoryEngineInterface):
                 # and lose the "not a failure" semantics entirely.
                 raise
             except Exception as e:
+                # The LLM client already defers on a spending limit, but embeddings, the
+                # reranker and code that wraps provider errors reach here instead. A spent
+                # budget does not come back within the 60-second retry window, and every
+                # retry of a refresh re-runs synthesis that is paid for whenever the limit
+                # lifts mid-run.
+                if is_spend_limit_error(e):
+                    retry_at = datetime.now(UTC) + SPEND_LIMIT_RETRY_DELAY
+                    logger.warning(f"Task {task_type} deferred until {retry_at.isoformat()}: spending limit reached")
+                    raise DeferOperation(exec_date=retry_at, reason=format_task_error(e)) from e
                 # exc_info, not a bare print_exc(): the traceback is the only pointer
                 # to the offending call site, and under production log volume the
                 # stderr copy is unattributed and rotates away first (issue #3218).
@@ -16132,6 +16158,65 @@ class MemoryEngine(MemoryEngineInterface):
         # through here, so the refresh still fires; a page can briefly read
         # "up to date" in the list while a refresh for it is already queued.
         return await self._has_retracted_grounding(conn, bank_id, _mm_row_field(mm_row, "id"))
+
+    async def scheduled_refresh_held_after_failure(
+        self,
+        conn,
+        bank_id: str,
+        mm_row: Any,
+        cron_fired_at: datetime,
+    ) -> bool:
+        """Whether the model's last refresh failed and nothing since justifies another try.
+
+        A failed refresh advances neither ``last_refreshed_at`` nor the watermark, so
+        the model stays both due and stale. Before this check the scheduler re-submitted
+        it on every tick for as long as the failure repeated: one oversized page re-ran
+        about eight minutes of paid synthesis every ten minutes for five days.
+
+        A retry now waits for both the next cron fire after the failure and a memory in
+        the model's scope written after it. A deterministic failure then costs at most
+        one attempt per cron period, and none while the bank is quiet.
+        """
+        last_run = await conn.fetchrow(
+            f"""
+            SELECT status, updated_at FROM {fq_table("async_operations")}
+            WHERE bank_id = $1 AND operation_type = 'refresh_mental_model'
+              AND status IN ('completed', 'failed')
+              AND task_payload->>'mental_model_id' = $2
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            bank_id,
+            str(_mm_row_field(mm_row, "id")),
+        )
+        if last_run is None or last_run["status"] != "failed":
+            return False
+        failed_at = last_run["updated_at"]
+        if failed_at.tzinfo is None:
+            failed_at = failed_at.replace(tzinfo=timezone.utc)
+        if cron_fired_at <= failed_at:
+            return True
+
+        scope = _mental_model_stale_scope(
+            key="",
+            tags=_mm_row_field(mm_row, "tags"),
+            trigger=_mm_row_field(mm_row, "trigger"),
+            last_memory_seen_at=failed_at,
+            last_refreshed_at=None,
+        )
+        assert scope is not None  # a watermark was passed, so a scope always resolves
+        from .memories import get_memories
+
+        return not await get_memories().any_memory_updated_since(
+            conn=conn,
+            fq_table=fq_table,
+            bank_id=bank_id,
+            since=scope.since,
+            fact_types=scope.fact_types,
+            tags=scope.tags,
+            tags_match=scope.tags_match,
+            tag_groups=scope.tag_groups,
+        )
 
     async def _has_retracted_grounding(self, conn, bank_id: str, mental_model_id: Any) -> bool:
         """Whether the model's stored grounding cites memories that no longer exist.

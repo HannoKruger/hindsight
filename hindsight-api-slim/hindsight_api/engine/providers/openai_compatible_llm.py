@@ -45,11 +45,13 @@ from hindsight_api.engine.cache_affinity import (
 )
 from hindsight_api.engine.llm_interface import (
     LLM_TOOL_CHOICE_AUTO,
+    SPEND_LIMIT_RETRY_DELAY,
     LLMInterface,
     LLMToolChoice,
     LLMToolChoiceMode,
     OutputTooLongError,
     ProviderRateLimitResetError,
+    is_spend_limit_error,
 )
 from hindsight_api.engine.llm_trace import LLMResponseUsage, stash_response_usage
 from hindsight_api.engine.providers.llm_debug import dump_request_on_4xx
@@ -505,6 +507,15 @@ def _rate_limit_retry_at(e: APIStatusError) -> datetime | None:
 def _raise_provider_quota_defer(
     e: APIStatusError, *, provider: str, model: str, scope: str, max_backoff: float
 ) -> None:
+    if is_spend_limit_error(e):
+        retry_at = datetime.now(UTC) + SPEND_LIMIT_RETRY_DELAY
+        raise ProviderRateLimitResetError(
+            retry_at=retry_at,
+            message=(
+                f"Spending limit reached ({provider}/{model}, scope={scope}); retry at {retry_at.isoformat()}: "
+                f"{_summarize_status_error(e)}"
+            ),
+        ) from e
     if e.status_code != 429:
         return
     retry_at = _rate_limit_retry_at(e)
