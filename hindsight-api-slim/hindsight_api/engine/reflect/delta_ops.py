@@ -167,6 +167,24 @@ _OPERATION_ADAPTER: TypeAdapter[Operation] = TypeAdapter(Operation)
 _BODY_FIELDS = ("text", "blocks")
 
 
+OP_CALL_MIN_COMPLETION_TOKENS = 16_384
+
+
+def op_call_completion_cap(advisory_tokens: int, configured: int | None) -> int:
+    """Transport cap for the unsay and delta op calls.
+
+    An operator-configured ``reflect_max_completion_tokens`` always wins. Left
+    unset, these calls used to go out with no cap at all, and a provider then
+    applies its own default: a looping model ran single unsay calls to 384,000
+    billed tokens against a prompt budget of ~6,000. The ceiling stays far above
+    any valid answer (4x the prompt budget) and never below the room a thinking
+    model needs before its JSON (#3421).
+    """
+    if configured is not None:
+        return configured
+    return max(OP_CALL_MIN_COMPLETION_TOKENS, 4 * advisory_tokens)
+
+
 def _validate_operations_list(raw_ops: Any) -> tuple[list[Operation], list[dict[str, Any]]]:
     """Validate each operation independently; drop invalid ops instead of failing the batch."""
     if not isinstance(raw_ops, list):

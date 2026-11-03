@@ -970,13 +970,11 @@ class TestDeltaRefreshPlumbing:
         - Completion cap: passing the document-sized ``delta_max_tokens`` as the
           provider's ``max_completion_tokens`` truncated the ops JSON on thinking
           models (reasoning tokens eat the budget), which at temperature 0 fails
-          the parse deterministically forever. The transport cap must be the
-          decoupled ``reflect_max_completion_tokens`` (uncapped by default),
-          exactly as reflect's synthesis (#3365/#3389).
+          the parse deterministically forever. The transport cap must stay
+          decoupled from it: a runaway ceiling well above any valid answer.
         """
-        from hindsight_api.config import get_config
         from hindsight_api.engine.llm_trace import current_trace_context
-        from hindsight_api.engine.reflect.delta_ops import DeltaOperationList
+        from hindsight_api.engine.reflect.delta_ops import OP_CALL_MIN_COMPLETION_TOKENS, DeltaOperationList
 
         bank_id = f"test-delta-trace-{uuid.uuid4().hex[:8]}"
         await memory.get_bank_profile(bank_id, request_context=request_context)
@@ -1019,10 +1017,10 @@ class TestDeltaRefreshPlumbing:
         await memory.refresh_mental_model(bank_id=bank_id, mental_model_id=mm["id"], request_context=request_context)
 
         assert captured["scope"] == "mental_model_delta_ops"
-        # Transport cap is the decoupled config (None by default), NOT delta_max_tokens
-        # (which would be max(2048, 2048*1.5) == 3072 for the default document budget).
-        assert captured["max_completion_tokens"] == get_config().reflect_max_completion_tokens
-        assert captured["max_completion_tokens"] != 3072
+        # Transport cap is a runaway ceiling, NOT delta_max_tokens (which would be
+        # max(2048, 2048*1.5) == 3072 for the default document budget).
+        assert captured["max_completion_tokens"] is not None
+        assert captured["max_completion_tokens"] >= OP_CALL_MIN_COMPLETION_TOKENS
         # The call ran inside a trace bound to this refresh.
         assert captured["trace_operation"] == "mental_model_delta_ops"
         assert captured["trace_bank_id"] == bank_id

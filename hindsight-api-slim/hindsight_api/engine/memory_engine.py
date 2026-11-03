@@ -14205,6 +14205,7 @@ class MemoryEngine(MemoryEngineInterface):
         # markdown if either the structuring or the LLM op call fails.
         from .reflect.delta_ops import (
             apply_operations,
+            op_call_completion_cap,
             parse_delta_operation_list,
         )
         from .reflect.prompts import (
@@ -14280,12 +14281,13 @@ class MemoryEngine(MemoryEngineInterface):
                 elif retracted and retraction_deferred_reason is None:
                     try:
                         doc_max_tokens = stored_max_tokens or 2048
+                        unsay_max_tokens = max(2048, int(doc_max_tokens * 1.5))
                         unsay_prompt = build_structured_retraction_prompt(
                             current_document_json=current_doc.model_dump_json(),
                             retracted_facts=retracted.facts,
                             surviving_facts=supporting_facts,
                             source_query=source_query,
-                            max_output_tokens=max(2048, int(doc_max_tokens * 1.5)),
+                            max_output_tokens=unsay_max_tokens,
                         )
                         unsay_llm = await _op_llm()
                         raw_unsay = await unsay_llm.call(
@@ -14293,7 +14295,9 @@ class MemoryEngine(MemoryEngineInterface):
                                 {"role": "system", "content": STRUCTURED_RETRACTION_SYSTEM_PROMPT},
                                 {"role": "user", "content": unsay_prompt},
                             ],
-                            max_completion_tokens=get_config().reflect_max_completion_tokens,
+                            max_completion_tokens=op_call_completion_cap(
+                                unsay_max_tokens, get_config().reflect_max_completion_tokens
+                            ),
                             temperature=get_config().llm_temperature_consolidation,
                             scope="mental_model_retraction_ops",
                         )
@@ -14402,8 +14406,8 @@ class MemoryEngine(MemoryEngineInterface):
                     # ``discriminator``. We parse + validate the JSON ourselves
                     # so the same prompt works against any LLM.
                     #
-                    # The transport cap is the decoupled ``reflect_max_completion_tokens``
-                    # (uncapped by default), NOT ``delta_max_tokens``. On thinking models
+                    # The transport cap is ``op_call_completion_cap`` (a runaway ceiling far
+                    # above the prompt budget, or the configured value), NOT ``delta_max_tokens``. On thinking models
                     # the provider's output budget is spent on reasoning tokens first, so
                     # capping at the document-sized ``delta_max_tokens`` truncates the ops
                     # JSON mid-string; at temperature 0 that malformed output is
@@ -14417,7 +14421,9 @@ class MemoryEngine(MemoryEngineInterface):
                             {"role": "system", "content": STRUCTURED_DELTA_SYSTEM_PROMPT},
                             {"role": "user", "content": user_prompt},
                         ],
-                        max_completion_tokens=get_config().reflect_max_completion_tokens,
+                        max_completion_tokens=op_call_completion_cap(
+                            delta_max_tokens, get_config().reflect_max_completion_tokens
+                        ),
                         temperature=get_config().llm_temperature_consolidation,
                         scope="mental_model_delta_ops",
                     )

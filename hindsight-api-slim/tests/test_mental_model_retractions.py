@@ -927,3 +927,98 @@ async def test_real_model_removes_only_the_retracted_claim(retraction_llm):
             "other two statements were not retracted and must survive untouched."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Output ceiling on the two op calls
+# ---------------------------------------------------------------------------
+
+# A provider given no max_tokens lets a looping model run to its own default; DeepInfra
+# billed 384,000 output tokens (over an hour of generation) for single unsay calls whose
+# prompt asked for ~6,000. The ceiling must exist, leave reasoning models the room #3421
+# needs, and never be smaller than the budget the prompt itself asks the model to meet.
+_REASONING_ROOM_TOKENS = 16_384
+
+
+def _advisory_budget(user_prompt: str) -> int:
+    import re as _re
+
+    match = _re.search(r"must fit within ~(\d+) tokens", user_prompt)
+    assert match, "the op prompt states its output budget"
+    return int(match.group(1))
+
+
+async def _refresh_with_both_op_calls(memory, request_context, monkeypatch, patch_reflect) -> list[dict[str, Any]]:
+    bank_id = f"test-op-ceiling-{uuid.uuid4().hex[:8]}"
+    await _ensure_bank(memory, bank_id, request_context)
+    pool = await memory._get_pool()
+    async with pool.acquire() as conn:
+        live = await _insert_memory(memory, conn, bank_id, "Tests run on every push.")
+        mm_id = await _create_page(
+            memory,
+            conn,
+            bank_id,
+            request_context,
+            based_on={
+                "world": [
+                    _fact(str(uuid.uuid4()), "Autocommit was disabled for hunk-level review.", "world"),
+                    _fact(str(live), "Tests run on every push.", "world"),
+                ]
+            },
+        )
+    patch_reflect(
+        memory,
+        text="Reviews now happen in pairs.",
+        facts=[_fact("obs-pairs", "Code review now happens in pairs.", "observation")],
+    )
+    calls = _patch_op_calls(monkeypatch, memory, retraction_ops=[_remove_first_block_of("conventions")], delta_ops=[])
+    await memory.refresh_mental_model(bank_id=bank_id, mental_model_id=mm_id, request_context=request_context)
+    await memory.delete_bank(bank_id, request_context=request_context)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_op_calls_get_a_hard_output_ceiling_when_none_is_configured(
+    memory: MemoryEngine, request_context: RequestContext, monkeypatch, patch_reflect
+):
+    from hindsight_api.config import _get_raw_config
+
+    monkeypatch.setattr(_get_raw_config(), "reflect_max_completion_tokens", None)
+
+    calls = await _refresh_with_both_op_calls(memory, request_context, monkeypatch, patch_reflect)
+
+    assert [call["kind"] for call in calls] == ["retraction", "delta"]
+    for call in calls:
+        ceiling = call["max_completion_tokens"]
+        assert ceiling is not None, f"{call['kind']} call must not run unbounded"
+        assert ceiling >= _REASONING_ROOM_TOKENS, "thinking models need room to reason before the JSON (#3421)"
+        assert ceiling >= 4 * _advisory_budget(call["messages"][1]["content"]), "a valid answer must always fit"
+
+
+@pytest.mark.asyncio
+async def test_a_configured_completion_cap_still_wins_on_op_calls(
+    memory: MemoryEngine, request_context: RequestContext, monkeypatch, patch_reflect
+):
+    from hindsight_api.config import _get_raw_config
+
+    monkeypatch.setattr(_get_raw_config(), "reflect_max_completion_tokens", 9_000)
+
+    calls = await _refresh_with_both_op_calls(memory, request_context, monkeypatch, patch_reflect)
+
+    assert [call["max_completion_tokens"] for call in calls] == [9_000, 9_000]
+
+
+def test_retraction_budget_steers_towards_removing_blocks_not_retyping_sections():
+    from hindsight_api.engine.reflect.prompts import build_structured_retraction_prompt
+
+    prompt = build_structured_retraction_prompt(
+        current_document_json='{"sections": []}',
+        retracted_facts=[_fact("gone", "Retired.", "world")],
+        surviving_facts=[],
+        source_query="What are the project's conventions?",
+        max_output_tokens=6144,
+    )
+    budget_section = prompt.split("## Output budget", 1)[1].split("## Task", 1)[0]
+
+    assert "replace_section_blocks" not in budget_section, "retyping whole sections is the long-output path"
+    assert "remove_block" in budget_section

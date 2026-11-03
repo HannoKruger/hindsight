@@ -1170,6 +1170,10 @@ RULES
   withdrawn — only its identifier changed. Keep that content.
 - **Do not add anything.** No ``append_block``, no ``insert_block``, no
   ``add_section``. This pass only takes away.
+- **Remove, do not retype.** Drop a whole block with ``remove_block`` and a whole
+  section with ``remove_section``. Use ``replace_block`` only to cut one claim out of
+  a block that otherwise survives, and ``replace_section_blocks`` only when most of a
+  section's blocks change. Never retype a section to drop a single claim.
 - **Do not tidy.** No rewording, reordering, or reformatting of surviving content.
   Never leave a note saying something was removed — the document must read as though
   the retracted claim was never there.
@@ -1242,10 +1246,11 @@ def build_structured_retraction_prompt(
     if max_output_tokens is not None:
         budget_hint = (
             f"\n\n## Output budget\n"
-            f"Your JSON response must fit within ~{max_output_tokens} tokens. If more "
-            "removals are needed than fit, prefer the highest-leverage ones first "
-            "(``replace_section_blocks`` over many block-level ops) so the response "
-            "always parses as valid JSON."
+            f"Your JSON response must fit within ~{max_output_tokens} tokens. This pass "
+            "only takes content away, so a correct answer is much shorter than the "
+            "document: mostly ``remove_block`` and ``remove_section`` ops, which carry no "
+            "text. If more removals are needed than fit, emit the most important ones "
+            "first so the response always parses as valid JSON."
         )
 
     task_footer = (
